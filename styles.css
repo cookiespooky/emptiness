@@ -114,7 +114,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .gesture-hint { color: var(--muted); font-size: .82rem; margin-top: 1rem; }
 
 .narrative {
-  bottom: calc(7.5rem + var(--safe-bottom));
+  bottom: calc(7.7rem + var(--safe-bottom));
   opacity: 0;
   transform: translateY(12px);
   transition: opacity .45s ease, transform .45s ease;
@@ -133,14 +133,20 @@ button { -webkit-tap-highlight-color: transparent; }
   position: fixed;
   z-index: 12;
   right: max(1rem, var(--safe-right));
-  bottom: calc(4.8rem + var(--safe-bottom));
+  bottom: calc(4.9rem + var(--safe-bottom));
   display: grid;
   gap: .18rem;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.distance-panel__label, #scaleValue { color: var(--muted); font-size: .72rem; }
+.distance-panel__label { color: var(--muted); font-size: .72rem; }
 #distanceValue { font-weight: 500; font-size: clamp(1.1rem, 3vw, 1.6rem); }
+#scaleValue {
+  max-width: 30rem;
+  color: var(--muted);
+  font-size: .74rem;
+  letter-spacing: .015em;
+}
 
 .progress {
   position: fixed;
@@ -149,8 +155,29 @@ button { -webkit-tap-highlight-color: transparent; }
   right: max(1rem, var(--safe-right));
   bottom: calc(.85rem + var(--safe-bottom));
 }
-.progress__track { height: 1px; background: var(--line); overflow: hidden; }
-.progress__track span { display: block; width: 0; height: 100%; background: var(--text); }
+.progress__track {
+  position: relative;
+  height: 1px;
+  background: var(--line);
+  overflow: visible;
+}
+.progress__track::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: 1px;
+  height: 7px;
+  background: rgba(255,255,255,.45);
+}
+.progress__track span {
+  position: absolute;
+  top: 0;
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--text);
+}
 .progress ol {
   list-style: none;
   margin: .55rem 0 0;
@@ -194,16 +221,17 @@ button { -webkit-tap-highlight-color: transparent; }
 .scroll-space { height: 22000px; }
 
 @media (max-width: 700px) {
-  .intro { top: 46%; }
+  .intro { top: 44%; }
   .intro h1 { font-size: clamp(3rem, 17vw, 5.2rem); }
-  .narrative { bottom: calc(9.4rem + var(--safe-bottom)); }
+  .narrative { bottom: calc(9.8rem + var(--safe-bottom)); }
   .narrative h2 { font-size: clamp(2.15rem, 12vw, 4rem); }
   .distance-panel {
     left: max(1rem, var(--safe-left));
     right: auto;
-    bottom: calc(4.75rem + var(--safe-bottom));
+    bottom: calc(4.9rem + var(--safe-bottom));
     text-align: left;
   }
+  #scaleValue { max-width: calc(100vw - 2rem); }
   .progress ol li:not(.is-active) { display: none; }
   .progress ol { justify-content: flex-start; }
 }
