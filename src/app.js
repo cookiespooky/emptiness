@@ -21,11 +21,23 @@ let width = 0;
 let height = 0;
 let dpr = 1;
 let progress = 0;
+let progressVelocity = 0;
 let targetProgress = 0;
 let activeSceneIndex = 0;
+let pendingSceneIndex = null;
+let narrativeOpacity = 0;
+let narrativeDirection = 1;
 let lastTime = performance.now();
 let touchStartY = null;
+let touchLastY = null;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const MOTION = {
+  stiffness: 42,
+  damping: 11,
+  maxVelocity: 0.65,
+  textFadeSpeed: 3.4
+};
 
 const stars = Array.from({ length: 90 }, (_, index) => ({
   x: pseudoRandom(index * 13.7),
@@ -72,6 +84,38 @@ function currentSceneIndex(value) {
   return index;
 }
 
+function setScene(index) {
+  activeSceneIndex = index;
+  const scene = scenes[index];
+  chapterLabel.textContent = scene.label;
+  sceneTitle.textContent = scene.title;
+  sceneText.textContent = scene.text;
+}
+
+function updateSceneTransition(deltaSeconds) {
+  const nextIndex = currentSceneIndex(progress);
+
+  if (nextIndex !== activeSceneIndex && pendingSceneIndex === null) {
+    pendingSceneIndex = nextIndex;
+    narrativeDirection = -1;
+  }
+
+  if (pendingSceneIndex !== null) {
+    narrativeOpacity += narrativeDirection * MOTION.textFadeSpeed * deltaSeconds;
+
+    if (narrativeDirection < 0 && narrativeOpacity <= 0) {
+      narrativeOpacity = 0;
+      setScene(pendingSceneIndex);
+      pendingSceneIndex = null;
+      narrativeDirection = 1;
+    }
+  } else {
+    narrativeOpacity += MOTION.textFadeSpeed * deltaSeconds;
+  }
+
+  narrativeOpacity = clamp(narrativeOpacity, 0, 1);
+}
+
 function interpolateDistance(value) {
   for (let i = 0; i < scenes.length - 1; i += 1) {
     const a = scenes[i];
@@ -108,18 +152,12 @@ function scaleLabel(value) {
 }
 
 function updateText() {
-  const nextIndex = currentSceneIndex(progress);
-  if (nextIndex !== activeSceneIndex) {
-    activeSceneIndex = nextIndex;
-    const scene = scenes[activeSceneIndex];
-    chapterLabel.textContent = scene.label;
-    sceneTitle.textContent = scene.title;
-    sceneText.textContent = scene.text;
-  }
-
   const started = progress > 0.015;
   intro.classList.toggle("is-hidden", started);
   narrative.classList.toggle("is-visible", started);
+  narrative.style.opacity = started ? String(narrativeOpacity) : "0";
+  narrative.style.transform = `translateY(${(1 - narrativeOpacity) * 14}px)`;
+
   distanceValue.textContent = formatDistance(interpolateDistance(progress));
   scaleValue.textContent = scaleLabel(progress);
   progressFill.style.width = `${progress * 100}%`;
@@ -129,20 +167,48 @@ function updateText() {
   });
 }
 
+function updateMotion(deltaSeconds) {
+  targetProgress = scrollProgress();
+
+  if (reduceMotion) {
+    progress = targetProgress;
+    progressVelocity = 0;
+    return;
+  }
+
+  const displacement = targetProgress - progress;
+  const acceleration = displacement * MOTION.stiffness;
+  progressVelocity += acceleration * deltaSeconds;
+  progressVelocity *= Math.exp(-MOTION.damping * deltaSeconds);
+  progressVelocity = clamp(progressVelocity, -MOTION.maxVelocity, MOTION.maxVelocity);
+  progress += progressVelocity * deltaSeconds;
+
+  if (Math.abs(displacement) < 0.00001 && Math.abs(progressVelocity) < 0.00001) {
+    progress = targetProgress;
+    progressVelocity = 0;
+  }
+
+  progress = clamp(progress, 0, 1);
+}
+
 function drawBackground() {
   ctx.fillStyle = "#050608";
   ctx.fillRect(0, 0, width, height);
 
   const fade = 1 - smoothstep(0.72, 1, progress) * 0.55;
+  const motionStretch = Math.min(12, Math.abs(progressVelocity) * width * 0.06);
+
   for (const star of stars) {
     const drift = progress * width * (0.03 + star.size * 0.012);
     const x = ((star.x * width - drift) % width + width) % width;
     const y = star.y * height;
     ctx.globalAlpha = star.alpha * fade;
-    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = Math.max(0.5, star.size);
     ctx.beginPath();
-    ctx.arc(x, y, star.size, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(x - Math.sign(progressVelocity) * motionStretch, y);
+    ctx.lineTo(x, y);
+    ctx.stroke();
   }
   ctx.globalAlpha = 1;
 }
@@ -157,14 +223,15 @@ function drawSceneObject(scene, sceneIndex) {
   const x = width * side + travel;
   const y = height * (sceneIndex === 2 ? 0.35 : 0.48);
   const visibility = 1 - smoothstep(0.08, 0.22, distance);
-  const approach = 1 + Math.pow(visibility, 5) * 4.5;
+  const softArrival = smoothstep(0, 1, visibility);
+  const approach = 1 + Math.pow(softArrival, 5) * 4.5;
   const radius = scene.radius * approach;
 
   const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 3.5);
   gradient.addColorStop(0, scene.color);
   gradient.addColorStop(0.2, `${scene.color}cc`);
   gradient.addColorStop(1, `${scene.color}00`);
-  ctx.globalAlpha = visibility;
+  ctx.globalAlpha = softArrival;
   ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(x, y, radius * 3.5, 0, Math.PI * 2);
@@ -194,11 +261,12 @@ function drawVoidIndicator() {
 }
 
 function render(time) {
-  const delta = Math.min(32, time - lastTime);
+  const deltaMilliseconds = Math.min(32, time - lastTime);
+  const deltaSeconds = deltaMilliseconds / 1000;
   lastTime = time;
-  targetProgress = scrollProgress();
-  progress = reduceMotion ? targetProgress : progress + (targetProgress - progress) * Math.min(1, delta * 0.0065);
 
+  updateMotion(deltaSeconds);
+  updateSceneTransition(deltaSeconds);
   drawBackground();
   drawVoidIndicator();
   scenes.forEach(drawSceneObject);
@@ -230,6 +298,7 @@ closeInfoButton.addEventListener("click", () => setInfoOpen(false));
 infoPanel.addEventListener("click", (event) => {
   if (event.target === infoPanel) setInfoOpen(false);
 });
+
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !infoPanel.hidden) setInfoOpen(false);
   if (["ArrowDown", "PageDown", " "].includes(event.key) && infoPanel.hidden) {
@@ -244,15 +313,26 @@ window.addEventListener("keydown", (event) => {
 
 canvas.addEventListener("touchstart", (event) => {
   touchStartY = event.touches[0]?.clientY ?? null;
+  touchLastY = touchStartY;
 }, { passive: true });
+
+canvas.addEventListener("touchmove", (event) => {
+  const currentY = event.touches[0]?.clientY;
+  if (currentY == null || touchLastY == null) return;
+  const deltaY = touchLastY - currentY;
+  touchLastY = currentY;
+  window.scrollBy(0, deltaY * 1.35);
+}, { passive: true });
+
 canvas.addEventListener("touchend", (event) => {
   if (touchStartY === null) return;
   const endY = event.changedTouches[0]?.clientY ?? touchStartY;
   const deltaY = touchStartY - endY;
   if (Math.abs(deltaY) > 28) {
-    window.scrollBy({ top: deltaY * 4.5, behavior: reduceMotion ? "auto" : "smooth" });
+    window.scrollBy({ top: deltaY * 1.6, behavior: reduceMotion ? "auto" : "smooth" });
   }
   touchStartY = null;
+  touchLastY = null;
 }, { passive: true });
 
 window.addEventListener("resize", resizeCanvas, { passive: true });
@@ -263,5 +343,6 @@ if (matchMedia("(pointer: coarse)").matches) {
 }
 
 buildProgress();
+setScene(0);
 resizeCanvas();
 requestAnimationFrame(render);
