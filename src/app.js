@@ -17,34 +17,35 @@ const closeInfoButton = document.querySelector("#closeInfoButton");
 const infoPanel = document.querySelector("#infoPanel");
 const gestureHint = document.querySelector("#gestureHint");
 
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const MOTION = {
+  virtualLength: 22000,
+  dragMultiplier: 1.15,
+  wheelImpulse: 0.0000019,
+  keyImpulse: 0.16,
+  kineticMultiplier: 1.7,
+  friction: 1.15,
+  maxVelocity: 0.42,
+  textFadeSpeed: 1.15
+};
+
 let width = 0;
 let height = 0;
 let dpr = 1;
 let progress = 0;
-let progressVelocity = 0;
-let targetProgress = 0;
+let velocity = 0;
 let activeSceneIndex = 0;
 let pendingSceneIndex = null;
 let narrativeOpacity = 0;
 let narrativeDirection = 1;
-let lastTime = performance.now();
-let touchStartY = null;
-let touchLastY = null;
+let lastFrameTime = performance.now();
+
+let touching = false;
+let touchLastY = 0;
 let touchLastTime = 0;
 let touchVelocity = 0;
-let kineticVelocity = 0;
-let kineticCarry = 0;
-const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-const MOTION = {
-  stiffness: 2.2,
-  damping: 3.2,
-  maxVelocity: 0.18,
-  textFadeSpeed: 0.82,
-  kineticFriction: 0.42,
-  kineticMultiplier: 2.8,
-  maxKineticVelocity: 9000
-};
+let touchDirection = 0;
 
 const stars = Array.from({ length: 90 }, (_, index) => ({
   x: pseudoRandom(index * 13.7),
@@ -58,17 +59,6 @@ function pseudoRandom(seed) {
   return x - Math.floor(x);
 }
 
-function resizeCanvas() {
-  width = window.innerWidth;
-  height = window.innerHeight;
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.floor(width * dpr);
-  canvas.height = Math.floor(height * dpr);
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -78,9 +68,15 @@ function smoothstep(edge0, edge1, value) {
   return x * x * (3 - 2 * x);
 }
 
-function scrollProgress() {
-  const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-  return maxScroll > 0 ? clamp(window.scrollY / maxScroll, 0, 1) : 0;
+function resizeCanvas() {
+  width = window.innerWidth;
+  height = window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 function currentSceneIndex(value) {
@@ -102,7 +98,7 @@ function setScene(index) {
 function updateSceneTransition(deltaSeconds) {
   const nextIndex = currentSceneIndex(progress);
 
-  if (nextIndex !== activeSceneIndex && pendingSceneIndex === null) {
+  if (nextIndex !== activeSceneIndex) {
     pendingSceneIndex = nextIndex;
     narrativeDirection = -1;
   }
@@ -123,19 +119,49 @@ function updateSceneTransition(deltaSeconds) {
   narrativeOpacity = clamp(narrativeOpacity, 0, 1);
 }
 
+function updateCamera(deltaSeconds) {
+  if (touching || reduceMotion) return;
+
+  progress += velocity * deltaSeconds;
+  velocity *= Math.exp(-MOTION.friction * deltaSeconds);
+
+  if (progress <= 0) {
+    progress = 0;
+    velocity = Math.max(0, velocity);
+  } else if (progress >= 1) {
+    progress = 1;
+    velocity = Math.min(0, velocity);
+  }
+
+  if (Math.abs(velocity) < 0.00002) velocity = 0;
+}
+
+function moveCameraByPixels(deltaPixels) {
+  const deltaProgress = (deltaPixels * MOTION.dragMultiplier) / MOTION.virtualLength;
+  progress = clamp(progress + deltaProgress, 0, 1);
+}
+
 function interpolateDistance(value) {
   for (let i = 0; i < scenes.length - 1; i += 1) {
     const a = scenes[i];
     const b = scenes[i + 1];
+
     if (value <= b.progress) {
       const local = clamp((value - a.progress) / (b.progress - a.progress), 0, 1);
       if (a.distanceMeters === 0) return b.distanceMeters * Math.pow(local, 2.2);
+
       const logA = Math.log10(Math.max(1, a.distanceMeters));
       const logB = Math.log10(Math.max(1, b.distanceMeters));
       return Math.pow(10, logA + (logB - logA) * smoothstep(0, 1, local));
     }
   }
+
   return scenes.at(-1).distanceMeters;
+}
+
+function formatNumber(value) {
+  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: digits }).format(value);
 }
 
 function formatDistance(meters) {
@@ -144,11 +170,6 @@ function formatDistance(meters) {
   if (meters < 1.496e11) return `${formatNumber(meters / 1e9)} млн км`;
   if (meters < 9.461e15) return `${formatNumber(meters / 1.496e11)} а. е.`;
   return `${formatNumber(meters / 9.461e15)} световых года`;
-}
-
-function formatNumber(value) {
-  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: digits }).format(value);
 }
 
 function scaleLabel(value) {
@@ -174,86 +195,33 @@ function updateText() {
   });
 }
 
-function updateKineticScroll(deltaSeconds) {
-  if (reduceMotion || touchStartY !== null || Math.abs(kineticVelocity) < 2) {
-    if (Math.abs(kineticVelocity) < 2) {
-      kineticVelocity = 0;
-      kineticCarry = 0;
-    }
-    return;
-  }
-
-  const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-  kineticCarry += kineticVelocity * deltaSeconds;
-
-  const wholePixels = kineticCarry > 0
-    ? Math.floor(kineticCarry)
-    : Math.ceil(kineticCarry);
-
-  if (wholePixels !== 0) {
-    const nextScroll = clamp(window.scrollY + wholePixels, 0, maxScroll);
-    window.scrollTo(0, nextScroll);
-    kineticCarry -= wholePixels;
-
-    if ((nextScroll <= 0 && kineticVelocity < 0) || (nextScroll >= maxScroll && kineticVelocity > 0)) {
-      kineticVelocity = 0;
-      kineticCarry = 0;
-      return;
-    }
-  }
-
-  kineticVelocity *= Math.exp(-MOTION.kineticFriction * deltaSeconds);
-}
-
-function updateMotion(deltaSeconds) {
-  targetProgress = scrollProgress();
-
-  if (reduceMotion) {
-    progress = targetProgress;
-    progressVelocity = 0;
-    return;
-  }
-
-  const displacement = targetProgress - progress;
-  const acceleration = displacement * MOTION.stiffness;
-  progressVelocity += acceleration * deltaSeconds;
-  progressVelocity *= Math.exp(-MOTION.damping * deltaSeconds);
-  progressVelocity = clamp(progressVelocity, -MOTION.maxVelocity, MOTION.maxVelocity);
-  progress += progressVelocity * deltaSeconds;
-
-  if (Math.abs(displacement) < 0.000001 && Math.abs(progressVelocity) < 0.000001) {
-    progress = targetProgress;
-    progressVelocity = 0;
-  }
-
-  progress = clamp(progress, 0, 1);
-}
-
 function drawBackground() {
   ctx.fillStyle = "#050608";
   ctx.fillRect(0, 0, width, height);
 
   const fade = 1 - smoothstep(0.72, 1, progress) * 0.55;
-  const combinedVelocity = progressVelocity + kineticVelocity / Math.max(1, document.documentElement.scrollHeight);
-  const motionStretch = Math.min(26, Math.abs(combinedVelocity) * width * 0.15);
+  const motionStretch = Math.min(26, Math.abs(velocity) * width * 0.26);
 
   for (const star of stars) {
     const drift = progress * width * (0.03 + star.size * 0.012);
     const x = ((star.x * width - drift) % width + width) % width;
     const y = star.y * height;
+
     ctx.globalAlpha = star.alpha * fade;
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = Math.max(0.5, star.size);
     ctx.beginPath();
-    ctx.moveTo(x - Math.sign(combinedVelocity) * motionStretch, y);
+    ctx.moveTo(x - Math.sign(velocity) * motionStretch, y);
     ctx.lineTo(x, y);
     ctx.stroke();
   }
+
   ctx.globalAlpha = 1;
 }
 
 function drawSceneObject(scene, sceneIndex) {
   if (scene.radius <= 0) return;
+
   const distance = Math.abs(progress - scene.progress);
   if (distance > 0.22) return;
 
@@ -270,11 +238,13 @@ function drawSceneObject(scene, sceneIndex) {
   gradient.addColorStop(0, scene.color);
   gradient.addColorStop(0.2, `${scene.color}cc`);
   gradient.addColorStop(1, `${scene.color}00`);
+
   ctx.globalAlpha = softArrival;
   ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(x, y, radius * 3.5, 0, Math.PI * 2);
   ctx.fill();
+
   ctx.fillStyle = scene.color;
   ctx.beginPath();
   ctx.arc(x, y, Math.max(1, radius), 0, Math.PI * 2);
@@ -290,6 +260,7 @@ function drawVoidIndicator() {
   ctx.globalAlpha = emptiness * 0.22;
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1;
+
   const y = height * 0.5;
   const gap = Math.max(36, Math.min(110, width * 0.11));
   ctx.beginPath();
@@ -300,17 +271,17 @@ function drawVoidIndicator() {
 }
 
 function render(time) {
-  const deltaMilliseconds = Math.min(32, time - lastTime);
+  const deltaMilliseconds = Math.min(32, time - lastFrameTime);
   const deltaSeconds = deltaMilliseconds / 1000;
-  lastTime = time;
+  lastFrameTime = time;
 
-  updateKineticScroll(deltaSeconds);
-  updateMotion(deltaSeconds);
+  updateCamera(deltaSeconds);
   updateSceneTransition(deltaSeconds);
   drawBackground();
   drawVoidIndicator();
   scenes.forEach(drawSceneObject);
   updateText();
+
   requestAnimationFrame(render);
 }
 
@@ -325,14 +296,12 @@ function buildProgress() {
 function setInfoOpen(open) {
   infoPanel.hidden = !open;
   infoButton.setAttribute("aria-expanded", String(open));
-  document.body.style.overflow = open ? "hidden" : "";
   if (open) closeInfoButton.focus();
 }
 
 startButton.addEventListener("click", () => {
-  kineticVelocity = 0;
-  kineticCarry = 0;
-  window.scrollTo({ top: window.innerHeight * 1.5, behavior: reduceMotion ? "auto" : "smooth" });
+  velocity = reduceMotion ? 0 : 0.12;
+  if (reduceMotion) progress = Math.max(progress, 0.08);
 });
 
 infoButton.addEventListener("click", () => setInfoOpen(true));
@@ -341,77 +310,103 @@ infoPanel.addEventListener("click", (event) => {
   if (event.target === infoPanel) setInfoOpen(false);
 });
 
+window.addEventListener("wheel", (event) => {
+  if (!infoPanel.hidden) return;
+  event.preventDefault();
+
+  const impulse = event.deltaY * MOTION.wheelImpulse;
+  velocity = clamp(velocity + impulse, -MOTION.maxVelocity, MOTION.maxVelocity);
+}, { passive: false });
+
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !infoPanel.hidden) setInfoOpen(false);
-  if (["ArrowDown", "PageDown", " "].includes(event.key) && infoPanel.hidden) {
-    event.preventDefault();
-    kineticVelocity = 0;
-    kineticCarry = 0;
-    window.scrollBy({ top: window.innerHeight * 0.75, behavior: reduceMotion ? "auto" : "smooth" });
+  if (event.key === "Escape" && !infoPanel.hidden) {
+    setInfoOpen(false);
+    return;
   }
-  if (["ArrowUp", "PageUp"].includes(event.key) && infoPanel.hidden) {
+
+  if (!infoPanel.hidden) return;
+
+  if (["ArrowDown", "PageDown", " "].includes(event.key)) {
     event.preventDefault();
-    kineticVelocity = 0;
-    kineticCarry = 0;
-    window.scrollBy({ top: -window.innerHeight * 0.75, behavior: reduceMotion ? "auto" : "smooth" });
+    velocity = clamp(velocity + MOTION.keyImpulse, -MOTION.maxVelocity, MOTION.maxVelocity);
+  }
+
+  if (["ArrowUp", "PageUp"].includes(event.key)) {
+    event.preventDefault();
+    velocity = clamp(velocity - MOTION.keyImpulse, -MOTION.maxVelocity, MOTION.maxVelocity);
   }
 });
 
 canvas.addEventListener("touchstart", (event) => {
+  if (!infoPanel.hidden) return;
   event.preventDefault();
-  const currentY = event.touches[0]?.clientY ?? null;
-  touchStartY = currentY;
-  touchLastY = currentY;
+
+  const y = event.touches[0]?.clientY;
+  if (y == null) return;
+
+  touching = true;
+  touchLastY = y;
   touchLastTime = performance.now();
   touchVelocity = 0;
-  kineticVelocity = 0;
-  kineticCarry = 0;
+  touchDirection = 0;
+  velocity = 0;
 }, { passive: false });
 
 canvas.addEventListener("touchmove", (event) => {
+  if (!touching || !infoPanel.hidden) return;
   event.preventDefault();
-  const currentY = event.touches[0]?.clientY;
-  if (currentY == null || touchLastY == null) return;
+
+  const y = event.touches[0]?.clientY;
+  if (y == null) return;
 
   const now = performance.now();
   const elapsed = Math.max(8, now - touchLastTime);
-  const deltaY = touchLastY - currentY;
-  const instantVelocity = (deltaY / elapsed) * 1000;
+  const deltaPixels = touchLastY - y;
+  const direction = Math.sign(deltaPixels);
+  const instantVelocity = ((deltaPixels / MOTION.virtualLength) / (elapsed / 1000)) * MOTION.dragMultiplier;
 
-  touchVelocity = touchVelocity * 0.6 + instantVelocity * 0.4;
-  touchLastY = currentY;
+  if (direction !== 0 && touchDirection !== 0 && direction !== touchDirection) {
+    touchVelocity = instantVelocity;
+  } else {
+    touchVelocity = touchVelocity * 0.55 + instantVelocity * 0.45;
+  }
+
+  if (direction !== 0) touchDirection = direction;
+  touchLastY = y;
   touchLastTime = now;
-  window.scrollBy(0, deltaY * 1.02);
+  moveCameraByPixels(deltaPixels);
 }, { passive: false });
 
 function finishTouch() {
-  kineticVelocity = reduceMotion
+  if (!touching) return;
+
+  touching = false;
+  velocity = reduceMotion
     ? 0
     : clamp(
         touchVelocity * MOTION.kineticMultiplier,
-        -MOTION.maxKineticVelocity,
-        MOTION.maxKineticVelocity
+        -MOTION.maxVelocity,
+        MOTION.maxVelocity
       );
-  kineticCarry = 0;
-  touchStartY = null;
-  touchLastY = null;
+
+  touchLastY = 0;
   touchLastTime = 0;
   touchVelocity = 0;
+  touchDirection = 0;
 }
 
 canvas.addEventListener("touchend", finishTouch, { passive: true });
 canvas.addEventListener("touchcancel", finishTouch, { passive: true });
 
-window.addEventListener("wheel", () => {
-  kineticVelocity = 0;
-  kineticCarry = 0;
-}, { passive: true });
 window.addEventListener("resize", resizeCanvas, { passive: true });
 window.addEventListener("orientationchange", resizeCanvas, { passive: true });
 
 if (matchMedia("(pointer: coarse)").matches) {
   gestureHint.textContent = "Проведите пальцем вверх";
 }
+
+document.documentElement.style.overflow = "hidden";
+document.body.style.overflow = "hidden";
 
 buildProgress();
 setScene(0);
