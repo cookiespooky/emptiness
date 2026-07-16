@@ -1,4 +1,4 @@
-import { scenes } from "./scenes.js";
+import { scenes, EARTH_PROGRESS } from "./scenes.js";
 
 const canvas = document.querySelector("#space");
 const ctx = canvas.getContext("2d", { alpha: false });
@@ -7,6 +7,7 @@ const narrative = document.querySelector(".narrative");
 const chapterLabel = document.querySelector("#chapterLabel");
 const sceneTitle = document.querySelector("#sceneTitle");
 const sceneText = document.querySelector("#sceneText");
+const distanceLabel = document.querySelector(".distance-panel__label");
 const distanceValue = document.querySelector("#distanceValue");
 const scaleValue = document.querySelector("#scaleValue");
 const progressFill = document.querySelector("#progressFill");
@@ -20,10 +21,10 @@ const gestureHint = document.querySelector("#gestureHint");
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const MOTION = {
-  virtualLength: 12000,
-  dragMultiplier: 1.35,
-  followSpeed: 14,
-  kineticMultiplier: 1.85,
+  virtualLength: 15000,
+  dragMultiplier: 1.4,
+  followSpeed: 13,
+  kineticMultiplier: 1.9,
   friction: 0.72,
   maxVelocity: 0.52,
   wheelImpulse: 0.00022,
@@ -34,14 +35,15 @@ const MOTION = {
 let width = 0;
 let height = 0;
 let dpr = 1;
-let camera = 0;
-let cameraTarget = 0;
+let camera = EARTH_PROGRESS;
+let cameraTarget = EARTH_PROGRESS;
 let velocity = 0;
-let activeSceneIndex = 0;
+let activeSceneIndex = scenes.findIndex((scene) => scene.id === "earth");
 let pendingSceneIndex = null;
-let narrativeOpacity = 0;
+let narrativeOpacity = 1;
 let narrativeDirection = 1;
 let lastFrameTime = performance.now();
+let hasStarted = false;
 
 let touching = false;
 let touchLastY = 0;
@@ -82,11 +84,18 @@ function resizeCanvas() {
 }
 
 function currentSceneIndex(value) {
-  let index = 0;
-  for (let i = 0; i < scenes.length; i += 1) {
-    if (value >= scenes[i].progress - 0.08) index = i;
-  }
-  return index;
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+
+  scenes.forEach((scene, index) => {
+    const distance = Math.abs(value - scene.progress);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+
+  return nearestIndex;
 }
 
 function setScene(index) {
@@ -128,17 +137,16 @@ function updateCamera(deltaSeconds) {
   }
 
   cameraTarget = clamp(cameraTarget, 0, 1);
-
   const follow = 1 - Math.exp(-MOTION.followSpeed * deltaSeconds);
   camera += (cameraTarget - camera) * follow;
 
   if (cameraTarget <= 0 && velocity < 0) velocity = 0;
   if (cameraTarget >= 1 && velocity > 0) velocity = 0;
-
   if (Math.abs(cameraTarget - camera) < 0.000001) camera = cameraTarget;
 }
 
 function moveTargetByPixels(deltaPixels) {
+  hasStarted = true;
   cameraTarget = clamp(
     cameraTarget + (deltaPixels * MOTION.dragMultiplier) / MOTION.virtualLength,
     0,
@@ -146,19 +154,26 @@ function moveTargetByPixels(deltaPixels) {
   );
 }
 
-function interpolateDistance(value) {
+function interpolateMetric(value) {
   for (let i = 0; i < scenes.length - 1; i += 1) {
     const a = scenes[i];
     const b = scenes[i + 1];
+
     if (value <= b.progress) {
       const local = clamp((value - a.progress) / (b.progress - a.progress), 0, 1);
-      if (a.distanceMeters === 0) return b.distanceMeters * Math.pow(local, 2.2);
-      const logA = Math.log10(Math.max(1, a.distanceMeters));
-      const logB = Math.log10(Math.max(1, b.distanceMeters));
-      return Math.pow(10, logA + (logB - logA) * smoothstep(0, 1, local));
+      const logA = Math.log10(Math.max(Number.MIN_VALUE, a.valueMeters));
+      const logB = Math.log10(Math.max(Number.MIN_VALUE, b.valueMeters));
+      return {
+        meters: Math.pow(10, logA + (logB - logA) * smoothstep(0, 1, local)),
+        metric: value < EARTH_PROGRESS ? "size" : b.metric
+      };
     }
   }
-  return scenes.at(-1).distanceMeters;
+
+  return {
+    meters: scenes.at(-1).valueMeters,
+    metric: scenes.at(-1).metric
+  };
 }
 
 function formatNumber(value) {
@@ -166,8 +181,13 @@ function formatNumber(value) {
   return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: digits }).format(value);
 }
 
-function formatDistance(meters) {
-  if (meters < 1_000) return `${Math.round(meters)} м`;
+function formatMetric(meters) {
+  if (meters < 1e-12) return `${formatNumber(meters / 1e-15)} фм`;
+  if (meters < 1e-9) return `${formatNumber(meters / 1e-12)} пм`;
+  if (meters < 1e-6) return `${formatNumber(meters / 1e-9)} нм`;
+  if (meters < 1e-3) return `${formatNumber(meters / 1e-6)} мкм`;
+  if (meters < 1) return `${formatNumber(meters * 1000)} мм`;
+  if (meters < 1_000) return `${formatNumber(meters)} м`;
   if (meters < 1e9) return `${formatNumber(meters / 1_000)} км`;
   if (meters < 1.496e11) return `${formatNumber(meters / 1e9)} млн км`;
   if (meters < 9.461e15) return `${formatNumber(meters / 1.496e11)} а. е.`;
@@ -175,20 +195,24 @@ function formatDistance(meters) {
 }
 
 function scaleLabel(value) {
-  if (value < 0.18) return "почти линейный масштаб";
-  if (value < 0.52) return "пространство ускоряется";
-  if (value < 0.88) return "логарифмическое сжатие";
-  return "возвращение к объекту";
+  if (value < 0.10) return "ядерный масштаб";
+  if (value < 0.28) return "атомный масштаб";
+  if (value < 0.45) return "биологический масштаб";
+  if (value < 0.56) return "человеческий масштаб";
+  if (value < 0.80) return "межпланетный масштаб";
+  return "межзвёздный масштаб";
 }
 
 function updateText() {
-  const started = camera > 0.015;
-  intro.classList.toggle("is-hidden", started);
-  narrative.classList.toggle("is-visible", started);
-  narrative.style.opacity = started ? String(narrativeOpacity) : "0";
+  const showIntro = !hasStarted && Math.abs(camera - EARTH_PROGRESS) < 0.01;
+  intro.classList.toggle("is-hidden", !showIntro);
+  narrative.classList.toggle("is-visible", !showIntro);
+  narrative.style.opacity = showIntro ? "0" : String(narrativeOpacity);
   narrative.style.transform = `translateY(${(1 - narrativeOpacity) * 14}px)`;
 
-  distanceValue.textContent = formatDistance(interpolateDistance(camera));
+  const metric = interpolateMetric(camera);
+  distanceLabel.textContent = metric.metric === "size" ? "Характерный размер" : "Расстояние";
+  distanceValue.textContent = formatMetric(metric.meters);
   scaleValue.textContent = scaleLabel(camera);
   progressFill.style.width = `${camera * 100}%`;
 
@@ -201,7 +225,8 @@ function drawBackground() {
   ctx.fillStyle = "#050608";
   ctx.fillRect(0, 0, width, height);
 
-  const fade = 1 - smoothstep(0.72, 1, camera) * 0.55;
+  const smallScale = 1 - smoothstep(0.12, 0.5, camera);
+  const fade = 1 - smallScale * 0.72;
   const visualVelocity = velocity + (cameraTarget - camera) * 2;
   const motionStretch = reducedMotion ? 0 : Math.min(28, Math.abs(visualVelocity) * width * 0.3);
 
@@ -219,21 +244,32 @@ function drawBackground() {
     ctx.stroke();
   }
 
+  if (smallScale > 0.15) {
+    ctx.globalAlpha = smallScale * 0.12;
+    ctx.strokeStyle = "#d9f1ff";
+    for (let i = 0; i < 18; i += 1) {
+      const radius = 20 + i * 24 + camera * 30;
+      ctx.beginPath();
+      ctx.arc(width * 0.5, height * 0.48, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
   ctx.globalAlpha = 1;
 }
 
 function drawSceneObject(scene, sceneIndex) {
   if (scene.radius <= 0) return;
   const distance = Math.abs(camera - scene.progress);
-  if (distance > 0.22) return;
+  if (distance > 0.18) return;
 
-  const side = sceneIndex % 2 === 0 ? 0.72 : 0.28;
-  const travel = (scene.progress - camera) * width * 3.4;
+  const side = sceneIndex % 2 === 0 ? 0.70 : 0.30;
+  const travel = (scene.progress - camera) * width * 4.2;
   const x = width * side + travel;
-  const y = height * (sceneIndex === 2 ? 0.35 : 0.48);
-  const visibility = 1 - smoothstep(0.08, 0.22, distance);
+  const y = height * (sceneIndex % 3 === 0 ? 0.36 : 0.49);
+  const visibility = 1 - smoothstep(0.06, 0.18, distance);
   const softArrival = smoothstep(0, 1, visibility);
-  const approach = 1 + Math.pow(softArrival, 5) * 4.5;
+  const approach = 1 + Math.pow(softArrival, 5) * 4.2;
   const radius = scene.radius * approach;
 
   const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 3.5);
@@ -254,19 +290,17 @@ function drawSceneObject(scene, sceneIndex) {
   ctx.globalAlpha = 1;
 }
 
-function drawVoidIndicator() {
-  const nearest = Math.min(...scenes.slice(0, -1).map((scene) => Math.abs(camera - scene.progress)));
-  const emptiness = smoothstep(0.035, 0.14, nearest);
-  if (emptiness <= 0) return;
+function drawCenterMarker() {
+  const centerDistance = Math.abs(camera - EARTH_PROGRESS);
+  const visibility = 1 - smoothstep(0.015, 0.08, centerDistance);
+  if (visibility <= 0) return;
 
-  ctx.globalAlpha = emptiness * 0.22;
+  ctx.globalAlpha = visibility * 0.45;
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1;
-  const y = height * 0.5;
-  const gap = Math.max(36, Math.min(110, width * 0.11));
   ctx.beginPath();
-  ctx.moveTo(width / 2 - gap, y);
-  ctx.lineTo(width / 2 + gap, y);
+  ctx.moveTo(width / 2, height * 0.28);
+  ctx.lineTo(width / 2, height * 0.68);
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
@@ -279,10 +313,9 @@ function render(time) {
   updateCamera(deltaSeconds);
   updateSceneTransition(deltaSeconds);
   drawBackground();
-  drawVoidIndicator();
+  drawCenterMarker();
   scenes.forEach(drawSceneObject);
   updateText();
-
   requestAnimationFrame(render);
 }
 
@@ -300,9 +333,12 @@ function setInfoOpen(open) {
   if (open) closeInfoButton.focus();
 }
 
-startButton.addEventListener("click", () => {
-  velocity = Math.max(velocity, 0.16);
-});
+function applyImpulse(amount) {
+  hasStarted = true;
+  velocity = clamp(velocity + amount, -MOTION.maxVelocity, MOTION.maxVelocity);
+}
+
+startButton.addEventListener("click", () => applyImpulse(0.16));
 
 infoButton.addEventListener("click", () => setInfoOpen(true));
 closeInfoButton.addEventListener("click", () => setInfoOpen(false));
@@ -313,11 +349,7 @@ infoPanel.addEventListener("click", (event) => {
 window.addEventListener("wheel", (event) => {
   if (!infoPanel.hidden) return;
   event.preventDefault();
-  velocity = clamp(
-    velocity + event.deltaY * MOTION.wheelImpulse,
-    -MOTION.maxVelocity,
-    MOTION.maxVelocity
-  );
+  applyImpulse(event.deltaY * MOTION.wheelImpulse);
 }, { passive: false });
 
 window.addEventListener("keydown", (event) => {
@@ -329,12 +361,12 @@ window.addEventListener("keydown", (event) => {
 
   if (["ArrowDown", "PageDown", " "].includes(event.key)) {
     event.preventDefault();
-    velocity = clamp(velocity + MOTION.keyImpulse, -MOTION.maxVelocity, MOTION.maxVelocity);
+    applyImpulse(MOTION.keyImpulse);
   }
 
   if (["ArrowUp", "PageUp"].includes(event.key)) {
     event.preventDefault();
-    velocity = clamp(velocity - MOTION.keyImpulse, -MOTION.maxVelocity, MOTION.maxVelocity);
+    applyImpulse(-MOTION.keyImpulse);
   }
 });
 
@@ -345,6 +377,7 @@ canvas.addEventListener("touchstart", (event) => {
   const y = event.touches[0]?.clientY;
   if (y == null) return;
 
+  hasStarted = true;
   touching = true;
   touchLastY = y;
   touchLastTime = performance.now();
@@ -400,13 +433,15 @@ window.addEventListener("resize", resizeCanvas, { passive: true });
 window.addEventListener("orientationchange", resizeCanvas, { passive: true });
 
 if (matchMedia("(pointer: coarse)").matches) {
-  gestureHint.textContent = "Проведите пальцем вверх";
+  gestureHint.textContent = "Вверх — внутрь материи · вниз — в космос";
+} else {
+  gestureHint.textContent = "Колесо вверх — меньше · вниз — больше";
 }
 
 document.documentElement.style.overflow = "hidden";
 document.body.style.overflow = "hidden";
 
 buildProgress();
-setScene(0);
+setScene(activeSceneIndex);
 resizeCanvas();
 requestAnimationFrame(render);
