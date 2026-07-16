@@ -36,13 +36,13 @@ let kineticVelocity = 0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const MOTION = {
-  stiffness: 2.8,
-  damping: 3.6,
-  maxVelocity: 0.22,
-  textFadeSpeed: 0.9,
-  kineticFriction: 1.45,
-  kineticMultiplier: 1.65,
-  maxKineticVelocity: 5200
+  stiffness: 2.2,
+  damping: 3.2,
+  maxVelocity: 0.18,
+  textFadeSpeed: 0.82,
+  kineticFriction: 0.42,
+  kineticMultiplier: 2.8,
+  maxKineticVelocity: 9000
 };
 
 const stars = Array.from({ length: 90 }, (_, index) => ({
@@ -174,8 +174,8 @@ function updateText() {
 }
 
 function updateKineticScroll(deltaSeconds) {
-  if (reduceMotion || touchStartY !== null || Math.abs(kineticVelocity) < 4) {
-    if (Math.abs(kineticVelocity) < 4) kineticVelocity = 0;
+  if (reduceMotion || touchStartY !== null || Math.abs(kineticVelocity) < 2) {
+    if (Math.abs(kineticVelocity) < 2) kineticVelocity = 0;
     return;
   }
 
@@ -222,7 +222,7 @@ function drawBackground() {
 
   const fade = 1 - smoothstep(0.72, 1, progress) * 0.55;
   const combinedVelocity = progressVelocity + kineticVelocity / Math.max(1, document.documentElement.scrollHeight);
-  const motionStretch = Math.min(22, Math.abs(combinedVelocity) * width * 0.12);
+  const motionStretch = Math.min(26, Math.abs(combinedVelocity) * width * 0.15);
 
   for (const star of stars) {
     const drift = progress * width * (0.03 + star.size * 0.012);
@@ -361,10 +361,10 @@ canvas.addEventListener("touchmove", (event) => {
   const deltaY = touchLastY - currentY;
   const instantVelocity = (deltaY / elapsed) * 1000;
 
-  touchVelocity = touchVelocity * 0.72 + instantVelocity * 0.28;
+  touchVelocity = touchVelocity * 0.6 + instantVelocity * 0.4;
   touchLastY = currentY;
   touchLastTime = now;
-  window.scrollBy(0, deltaY * 1.05);
+  window.scrollBy(0, deltaY * 1.02);
 }, { passive: false });
 
 function finishTouch() {
