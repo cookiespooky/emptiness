@@ -17,23 +17,25 @@ const closeInfoButton = document.querySelector("#closeInfoButton");
 const infoPanel = document.querySelector("#infoPanel");
 const gestureHint = document.querySelector("#gestureHint");
 
-const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const MOTION = {
-  virtualLength: 22000,
-  dragMultiplier: 1.15,
-  wheelImpulse: 0.0000019,
-  keyImpulse: 0.16,
-  kineticMultiplier: 1.7,
-  friction: 1.15,
-  maxVelocity: 0.42,
-  textFadeSpeed: 1.15
+  virtualLength: 12000,
+  dragMultiplier: 1.35,
+  followSpeed: 14,
+  kineticMultiplier: 1.85,
+  friction: 0.72,
+  maxVelocity: 0.52,
+  wheelImpulse: 0.00022,
+  keyImpulse: 0.11,
+  textFadeSpeed: reducedMotion ? 6 : 1.4
 };
 
 let width = 0;
 let height = 0;
 let dpr = 1;
-let progress = 0;
+let camera = 0;
+let cameraTarget = 0;
 let velocity = 0;
 let activeSceneIndex = 0;
 let pendingSceneIndex = null;
@@ -55,8 +57,8 @@ const stars = Array.from({ length: 90 }, (_, index) => ({
 }));
 
 function pseudoRandom(seed) {
-  const x = Math.sin(seed + 1) * 43758.5453;
-  return x - Math.floor(x);
+  const value = Math.sin(seed + 1) * 43758.5453;
+  return value - Math.floor(value);
 }
 
 function clamp(value, min, max) {
@@ -96,16 +98,15 @@ function setScene(index) {
 }
 
 function updateSceneTransition(deltaSeconds) {
-  const nextIndex = currentSceneIndex(progress);
+  const nextIndex = currentSceneIndex(camera);
 
-  if (nextIndex !== activeSceneIndex) {
+  if (nextIndex !== activeSceneIndex && pendingSceneIndex === null) {
     pendingSceneIndex = nextIndex;
     narrativeDirection = -1;
   }
 
   if (pendingSceneIndex !== null) {
     narrativeOpacity += narrativeDirection * MOTION.textFadeSpeed * deltaSeconds;
-
     if (narrativeDirection < 0 && narrativeOpacity <= 0) {
       narrativeOpacity = 0;
       setScene(pendingSceneIndex);
@@ -120,42 +121,43 @@ function updateSceneTransition(deltaSeconds) {
 }
 
 function updateCamera(deltaSeconds) {
-  if (touching || reduceMotion) return;
-
-  progress += velocity * deltaSeconds;
-  velocity *= Math.exp(-MOTION.friction * deltaSeconds);
-
-  if (progress <= 0) {
-    progress = 0;
-    velocity = Math.max(0, velocity);
-  } else if (progress >= 1) {
-    progress = 1;
-    velocity = Math.min(0, velocity);
+  if (!touching) {
+    cameraTarget += velocity * deltaSeconds;
+    velocity *= Math.exp(-MOTION.friction * deltaSeconds);
+    if (Math.abs(velocity) < 0.00001) velocity = 0;
   }
 
-  if (Math.abs(velocity) < 0.00002) velocity = 0;
+  cameraTarget = clamp(cameraTarget, 0, 1);
+
+  const follow = 1 - Math.exp(-MOTION.followSpeed * deltaSeconds);
+  camera += (cameraTarget - camera) * follow;
+
+  if (cameraTarget <= 0 && velocity < 0) velocity = 0;
+  if (cameraTarget >= 1 && velocity > 0) velocity = 0;
+
+  if (Math.abs(cameraTarget - camera) < 0.000001) camera = cameraTarget;
 }
 
-function moveCameraByPixels(deltaPixels) {
-  const deltaProgress = (deltaPixels * MOTION.dragMultiplier) / MOTION.virtualLength;
-  progress = clamp(progress + deltaProgress, 0, 1);
+function moveTargetByPixels(deltaPixels) {
+  cameraTarget = clamp(
+    cameraTarget + (deltaPixels * MOTION.dragMultiplier) / MOTION.virtualLength,
+    0,
+    1
+  );
 }
 
 function interpolateDistance(value) {
   for (let i = 0; i < scenes.length - 1; i += 1) {
     const a = scenes[i];
     const b = scenes[i + 1];
-
     if (value <= b.progress) {
       const local = clamp((value - a.progress) / (b.progress - a.progress), 0, 1);
       if (a.distanceMeters === 0) return b.distanceMeters * Math.pow(local, 2.2);
-
       const logA = Math.log10(Math.max(1, a.distanceMeters));
       const logB = Math.log10(Math.max(1, b.distanceMeters));
       return Math.pow(10, logA + (logB - logA) * smoothstep(0, 1, local));
     }
   }
-
   return scenes.at(-1).distanceMeters;
 }
 
@@ -180,15 +182,15 @@ function scaleLabel(value) {
 }
 
 function updateText() {
-  const started = progress > 0.015;
+  const started = camera > 0.015;
   intro.classList.toggle("is-hidden", started);
   narrative.classList.toggle("is-visible", started);
   narrative.style.opacity = started ? String(narrativeOpacity) : "0";
   narrative.style.transform = `translateY(${(1 - narrativeOpacity) * 14}px)`;
 
-  distanceValue.textContent = formatDistance(interpolateDistance(progress));
-  scaleValue.textContent = scaleLabel(progress);
-  progressFill.style.width = `${progress * 100}%`;
+  distanceValue.textContent = formatDistance(interpolateDistance(camera));
+  scaleValue.textContent = scaleLabel(camera);
+  progressFill.style.width = `${camera * 100}%`;
 
   [...progressSteps.children].forEach((item, index) => {
     item.classList.toggle("is-active", index === activeSceneIndex);
@@ -199,11 +201,12 @@ function drawBackground() {
   ctx.fillStyle = "#050608";
   ctx.fillRect(0, 0, width, height);
 
-  const fade = 1 - smoothstep(0.72, 1, progress) * 0.55;
-  const motionStretch = Math.min(26, Math.abs(velocity) * width * 0.26);
+  const fade = 1 - smoothstep(0.72, 1, camera) * 0.55;
+  const visualVelocity = velocity + (cameraTarget - camera) * 2;
+  const motionStretch = reducedMotion ? 0 : Math.min(28, Math.abs(visualVelocity) * width * 0.3);
 
   for (const star of stars) {
-    const drift = progress * width * (0.03 + star.size * 0.012);
+    const drift = camera * width * (0.03 + star.size * 0.012);
     const x = ((star.x * width - drift) % width + width) % width;
     const y = star.y * height;
 
@@ -211,7 +214,7 @@ function drawBackground() {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = Math.max(0.5, star.size);
     ctx.beginPath();
-    ctx.moveTo(x - Math.sign(velocity) * motionStretch, y);
+    ctx.moveTo(x - Math.sign(visualVelocity) * motionStretch, y);
     ctx.lineTo(x, y);
     ctx.stroke();
   }
@@ -221,12 +224,11 @@ function drawBackground() {
 
 function drawSceneObject(scene, sceneIndex) {
   if (scene.radius <= 0) return;
-
-  const distance = Math.abs(progress - scene.progress);
+  const distance = Math.abs(camera - scene.progress);
   if (distance > 0.22) return;
 
   const side = sceneIndex % 2 === 0 ? 0.72 : 0.28;
-  const travel = (scene.progress - progress) * width * 3.4;
+  const travel = (scene.progress - camera) * width * 3.4;
   const x = width * side + travel;
   const y = height * (sceneIndex === 2 ? 0.35 : 0.48);
   const visibility = 1 - smoothstep(0.08, 0.22, distance);
@@ -253,14 +255,13 @@ function drawSceneObject(scene, sceneIndex) {
 }
 
 function drawVoidIndicator() {
-  const nearest = Math.min(...scenes.slice(0, -1).map((scene) => Math.abs(progress - scene.progress)));
+  const nearest = Math.min(...scenes.slice(0, -1).map((scene) => Math.abs(camera - scene.progress)));
   const emptiness = smoothstep(0.035, 0.14, nearest);
   if (emptiness <= 0) return;
 
   ctx.globalAlpha = emptiness * 0.22;
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 1;
-
   const y = height * 0.5;
   const gap = Math.max(36, Math.min(110, width * 0.11));
   ctx.beginPath();
@@ -287,9 +288,9 @@ function render(time) {
 
 function buildProgress() {
   for (const scene of scenes) {
-    const li = document.createElement("li");
-    li.textContent = scene.label;
-    progressSteps.append(li);
+    const item = document.createElement("li");
+    item.textContent = scene.label;
+    progressSteps.append(item);
   }
 }
 
@@ -300,8 +301,7 @@ function setInfoOpen(open) {
 }
 
 startButton.addEventListener("click", () => {
-  velocity = reduceMotion ? 0 : 0.12;
-  if (reduceMotion) progress = Math.max(progress, 0.08);
+  velocity = Math.max(velocity, 0.16);
 });
 
 infoButton.addEventListener("click", () => setInfoOpen(true));
@@ -313,9 +313,11 @@ infoPanel.addEventListener("click", (event) => {
 window.addEventListener("wheel", (event) => {
   if (!infoPanel.hidden) return;
   event.preventDefault();
-
-  const impulse = event.deltaY * MOTION.wheelImpulse;
-  velocity = clamp(velocity + impulse, -MOTION.maxVelocity, MOTION.maxVelocity);
+  velocity = clamp(
+    velocity + event.deltaY * MOTION.wheelImpulse,
+    -MOTION.maxVelocity,
+    MOTION.maxVelocity
+  );
 }, { passive: false });
 
 window.addEventListener("keydown", (event) => {
@@ -323,7 +325,6 @@ window.addEventListener("keydown", (event) => {
     setInfoOpen(false);
     return;
   }
-
   if (!infoPanel.hidden) return;
 
   if (["ArrowDown", "PageDown", " "].includes(event.key)) {
@@ -350,6 +351,7 @@ canvas.addEventListener("touchstart", (event) => {
   touchVelocity = 0;
   touchDirection = 0;
   velocity = 0;
+  cameraTarget = camera;
 }, { passive: false });
 
 canvas.addEventListener("touchmove", (event) => {
@@ -360,35 +362,31 @@ canvas.addEventListener("touchmove", (event) => {
   if (y == null) return;
 
   const now = performance.now();
-  const elapsed = Math.max(8, now - touchLastTime);
+  const elapsedSeconds = Math.max(0.008, (now - touchLastTime) / 1000);
   const deltaPixels = touchLastY - y;
   const direction = Math.sign(deltaPixels);
-  const instantVelocity = ((deltaPixels / MOTION.virtualLength) / (elapsed / 1000)) * MOTION.dragMultiplier;
+  const instantVelocity = ((deltaPixels * MOTION.dragMultiplier) / MOTION.virtualLength) / elapsedSeconds;
 
   if (direction !== 0 && touchDirection !== 0 && direction !== touchDirection) {
     touchVelocity = instantVelocity;
   } else {
-    touchVelocity = touchVelocity * 0.55 + instantVelocity * 0.45;
+    touchVelocity = touchVelocity * 0.45 + instantVelocity * 0.55;
   }
 
   if (direction !== 0) touchDirection = direction;
   touchLastY = y;
   touchLastTime = now;
-  moveCameraByPixels(deltaPixels);
+  moveTargetByPixels(deltaPixels);
 }, { passive: false });
 
 function finishTouch() {
   if (!touching) return;
-
   touching = false;
-  velocity = reduceMotion
-    ? 0
-    : clamp(
-        touchVelocity * MOTION.kineticMultiplier,
-        -MOTION.maxVelocity,
-        MOTION.maxVelocity
-      );
-
+  velocity = clamp(
+    touchVelocity * MOTION.kineticMultiplier,
+    -MOTION.maxVelocity,
+    MOTION.maxVelocity
+  );
   touchLastY = 0;
   touchLastTime = 0;
   touchVelocity = 0;
