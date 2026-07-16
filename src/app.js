@@ -33,6 +33,7 @@ let touchLastY = null;
 let touchLastTime = 0;
 let touchVelocity = 0;
 let kineticVelocity = 0;
+let kineticCarry = 0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const MOTION = {
@@ -175,18 +176,30 @@ function updateText() {
 
 function updateKineticScroll(deltaSeconds) {
   if (reduceMotion || touchStartY !== null || Math.abs(kineticVelocity) < 2) {
-    if (Math.abs(kineticVelocity) < 2) kineticVelocity = 0;
+    if (Math.abs(kineticVelocity) < 2) {
+      kineticVelocity = 0;
+      kineticCarry = 0;
+    }
     return;
   }
 
   const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-  const before = window.scrollY;
-  window.scrollBy(0, kineticVelocity * deltaSeconds);
-  const after = window.scrollY;
+  kineticCarry += kineticVelocity * deltaSeconds;
 
-  if ((after <= 0 && kineticVelocity < 0) || (after >= maxScroll && kineticVelocity > 0) || after === before) {
-    kineticVelocity = 0;
-    return;
+  const wholePixels = kineticCarry > 0
+    ? Math.floor(kineticCarry)
+    : Math.ceil(kineticCarry);
+
+  if (wholePixels !== 0) {
+    const nextScroll = clamp(window.scrollY + wholePixels, 0, maxScroll);
+    window.scrollTo(0, nextScroll);
+    kineticCarry -= wholePixels;
+
+    if ((nextScroll <= 0 && kineticVelocity < 0) || (nextScroll >= maxScroll && kineticVelocity > 0)) {
+      kineticVelocity = 0;
+      kineticCarry = 0;
+      return;
+    }
   }
 
   kineticVelocity *= Math.exp(-MOTION.kineticFriction * deltaSeconds);
@@ -318,6 +331,7 @@ function setInfoOpen(open) {
 
 startButton.addEventListener("click", () => {
   kineticVelocity = 0;
+  kineticCarry = 0;
   window.scrollTo({ top: window.innerHeight * 1.5, behavior: reduceMotion ? "auto" : "smooth" });
 });
 
@@ -332,11 +346,13 @@ window.addEventListener("keydown", (event) => {
   if (["ArrowDown", "PageDown", " "].includes(event.key) && infoPanel.hidden) {
     event.preventDefault();
     kineticVelocity = 0;
+    kineticCarry = 0;
     window.scrollBy({ top: window.innerHeight * 0.75, behavior: reduceMotion ? "auto" : "smooth" });
   }
   if (["ArrowUp", "PageUp"].includes(event.key) && infoPanel.hidden) {
     event.preventDefault();
     kineticVelocity = 0;
+    kineticCarry = 0;
     window.scrollBy({ top: -window.innerHeight * 0.75, behavior: reduceMotion ? "auto" : "smooth" });
   }
 });
@@ -349,6 +365,7 @@ canvas.addEventListener("touchstart", (event) => {
   touchLastTime = performance.now();
   touchVelocity = 0;
   kineticVelocity = 0;
+  kineticCarry = 0;
 }, { passive: false });
 
 canvas.addEventListener("touchmove", (event) => {
@@ -375,6 +392,7 @@ function finishTouch() {
         -MOTION.maxKineticVelocity,
         MOTION.maxKineticVelocity
       );
+  kineticCarry = 0;
   touchStartY = null;
   touchLastY = null;
   touchLastTime = 0;
@@ -386,6 +404,7 @@ canvas.addEventListener("touchcancel", finishTouch, { passive: true });
 
 window.addEventListener("wheel", () => {
   kineticVelocity = 0;
+  kineticCarry = 0;
 }, { passive: true });
 window.addEventListener("resize", resizeCanvas, { passive: true });
 window.addEventListener("orientationchange", resizeCanvas, { passive: true });
