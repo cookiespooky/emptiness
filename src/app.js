@@ -30,13 +30,19 @@ let narrativeDirection = 1;
 let lastTime = performance.now();
 let touchStartY = null;
 let touchLastY = null;
+let touchLastTime = 0;
+let touchVelocity = 0;
+let kineticVelocity = 0;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const MOTION = {
   stiffness: 2.8,
   damping: 3.6,
   maxVelocity: 0.22,
-  textFadeSpeed: 0.9
+  textFadeSpeed: 0.9,
+  kineticFriction: 1.45,
+  kineticMultiplier: 1.65,
+  maxKineticVelocity: 5200
 };
 
 const stars = Array.from({ length: 90 }, (_, index) => ({
@@ -167,6 +173,25 @@ function updateText() {
   });
 }
 
+function updateKineticScroll(deltaSeconds) {
+  if (reduceMotion || touchStartY !== null || Math.abs(kineticVelocity) < 4) {
+    if (Math.abs(kineticVelocity) < 4) kineticVelocity = 0;
+    return;
+  }
+
+  const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+  const before = window.scrollY;
+  window.scrollBy(0, kineticVelocity * deltaSeconds);
+  const after = window.scrollY;
+
+  if ((after <= 0 && kineticVelocity < 0) || (after >= maxScroll && kineticVelocity > 0) || after === before) {
+    kineticVelocity = 0;
+    return;
+  }
+
+  kineticVelocity *= Math.exp(-MOTION.kineticFriction * deltaSeconds);
+}
+
 function updateMotion(deltaSeconds) {
   targetProgress = scrollProgress();
 
@@ -196,7 +221,8 @@ function drawBackground() {
   ctx.fillRect(0, 0, width, height);
 
   const fade = 1 - smoothstep(0.72, 1, progress) * 0.55;
-  const motionStretch = Math.min(22, Math.abs(progressVelocity) * width * 0.12);
+  const combinedVelocity = progressVelocity + kineticVelocity / Math.max(1, document.documentElement.scrollHeight);
+  const motionStretch = Math.min(22, Math.abs(combinedVelocity) * width * 0.12);
 
   for (const star of stars) {
     const drift = progress * width * (0.03 + star.size * 0.012);
@@ -206,7 +232,7 @@ function drawBackground() {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = Math.max(0.5, star.size);
     ctx.beginPath();
-    ctx.moveTo(x - Math.sign(progressVelocity) * motionStretch, y);
+    ctx.moveTo(x - Math.sign(combinedVelocity) * motionStretch, y);
     ctx.lineTo(x, y);
     ctx.stroke();
   }
@@ -265,6 +291,7 @@ function render(time) {
   const deltaSeconds = deltaMilliseconds / 1000;
   lastTime = time;
 
+  updateKineticScroll(deltaSeconds);
   updateMotion(deltaSeconds);
   updateSceneTransition(deltaSeconds);
   drawBackground();
@@ -290,6 +317,7 @@ function setInfoOpen(open) {
 }
 
 startButton.addEventListener("click", () => {
+  kineticVelocity = 0;
   window.scrollTo({ top: window.innerHeight * 1.5, behavior: reduceMotion ? "auto" : "smooth" });
 });
 
@@ -303,32 +331,62 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !infoPanel.hidden) setInfoOpen(false);
   if (["ArrowDown", "PageDown", " "].includes(event.key) && infoPanel.hidden) {
     event.preventDefault();
+    kineticVelocity = 0;
     window.scrollBy({ top: window.innerHeight * 0.75, behavior: reduceMotion ? "auto" : "smooth" });
   }
   if (["ArrowUp", "PageUp"].includes(event.key) && infoPanel.hidden) {
     event.preventDefault();
+    kineticVelocity = 0;
     window.scrollBy({ top: -window.innerHeight * 0.75, behavior: reduceMotion ? "auto" : "smooth" });
   }
 });
 
 canvas.addEventListener("touchstart", (event) => {
-  touchStartY = event.touches[0]?.clientY ?? null;
-  touchLastY = touchStartY;
-}, { passive: true });
+  event.preventDefault();
+  const currentY = event.touches[0]?.clientY ?? null;
+  touchStartY = currentY;
+  touchLastY = currentY;
+  touchLastTime = performance.now();
+  touchVelocity = 0;
+  kineticVelocity = 0;
+}, { passive: false });
 
 canvas.addEventListener("touchmove", (event) => {
+  event.preventDefault();
   const currentY = event.touches[0]?.clientY;
   if (currentY == null || touchLastY == null) return;
-  const deltaY = touchLastY - currentY;
-  touchLastY = currentY;
-  window.scrollBy(0, deltaY * 1.05);
-}, { passive: true });
 
-canvas.addEventListener("touchend", () => {
+  const now = performance.now();
+  const elapsed = Math.max(8, now - touchLastTime);
+  const deltaY = touchLastY - currentY;
+  const instantVelocity = (deltaY / elapsed) * 1000;
+
+  touchVelocity = touchVelocity * 0.72 + instantVelocity * 0.28;
+  touchLastY = currentY;
+  touchLastTime = now;
+  window.scrollBy(0, deltaY * 1.05);
+}, { passive: false });
+
+function finishTouch() {
+  kineticVelocity = reduceMotion
+    ? 0
+    : clamp(
+        touchVelocity * MOTION.kineticMultiplier,
+        -MOTION.maxKineticVelocity,
+        MOTION.maxKineticVelocity
+      );
   touchStartY = null;
   touchLastY = null;
-}, { passive: true });
+  touchLastTime = 0;
+  touchVelocity = 0;
+}
 
+canvas.addEventListener("touchend", finishTouch, { passive: true });
+canvas.addEventListener("touchcancel", finishTouch, { passive: true });
+
+window.addEventListener("wheel", () => {
+  kineticVelocity = 0;
+}, { passive: true });
 window.addEventListener("resize", resizeCanvas, { passive: true });
 window.addEventListener("orientationchange", resizeCanvas, { passive: true });
 
