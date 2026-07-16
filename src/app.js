@@ -33,10 +33,10 @@ let touchLastY = null;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const MOTION = {
-  stiffness: 42,
-  damping: 11,
-  maxVelocity: 0.65,
-  textFadeSpeed: 3.4
+  stiffness: 8.5,
+  damping: 3.1,
+  maxVelocity: 0.34,
+  textFadeSpeed: 1.45
 };
 
 const stars = Array.from({ length: 90 }, (_, index) => ({
@@ -183,7 +183,7 @@ function updateMotion(deltaSeconds) {
   progressVelocity = clamp(progressVelocity, -MOTION.maxVelocity, MOTION.maxVelocity);
   progress += progressVelocity * deltaSeconds;
 
-  if (Math.abs(displacement) < 0.00001 && Math.abs(progressVelocity) < 0.00001) {
+  if (Math.abs(displacement) < 0.000003 && Math.abs(progressVelocity) < 0.000003) {
     progress = targetProgress;
     progressVelocity = 0;
   }
@@ -196,7 +196,7 @@ function drawBackground() {
   ctx.fillRect(0, 0, width, height);
 
   const fade = 1 - smoothstep(0.72, 1, progress) * 0.55;
-  const motionStretch = Math.min(12, Math.abs(progressVelocity) * width * 0.06);
+  const motionStretch = Math.min(18, Math.abs(progressVelocity) * width * 0.09);
 
   for (const star of stars) {
     const drift = progress * width * (0.03 + star.size * 0.012);
@@ -321,7 +321,7 @@ canvas.addEventListener("touchmove", (event) => {
   if (currentY == null || touchLastY == null) return;
   const deltaY = touchLastY - currentY;
   touchLastY = currentY;
-  window.scrollBy(0, deltaY * 1.35);
+  window.scrollBy(0, deltaY * 1.1);
 }, { passive: true });
 
 canvas.addEventListener("touchend", (event) => {
@@ -329,7 +329,7 @@ canvas.addEventListener("touchend", (event) => {
   const endY = event.changedTouches[0]?.clientY ?? touchStartY;
   const deltaY = touchStartY - endY;
   if (Math.abs(deltaY) > 28) {
-    window.scrollBy({ top: deltaY * 1.6, behavior: reduceMotion ? "auto" : "smooth" });
+    window.scrollBy({ top: deltaY * 1.25, behavior: reduceMotion ? "auto" : "smooth" });
   }
   touchStartY = null;
   touchLastY = null;
