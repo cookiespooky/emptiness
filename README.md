@@ -44,3 +44,5 @@ python3 -m http.server 8080
 - JavaScript ES modules
 - Canvas 2D
 - статические данные
+
+<!-- Pages deploy trigger -->
