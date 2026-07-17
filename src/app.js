@@ -47,14 +47,14 @@ const positionedScenes = scenes.map((scene) => ({
 }));
 
 const MOTION = {
-  virtualLength: 66000,
+  virtualLength: 198000,
   dragMultiplier: 1.45,
   followSpeed: 12,
   kineticMultiplier: 1.9,
   friction: 1.48,
   maxVelocity: 0.5,
-  wheelImpulse: 0.000055,
-  keyImpulse: 0.025,
+  wheelImpulse: 0.000018333333333333333,
+  keyImpulse: 0.008333333333333333,
   textFadeSpeed: reducedMotion ? 7 : 1.5
 };
 
@@ -245,13 +245,17 @@ function updateText() {
   const meters = 10 ** currentLog;
   const orders = currentLog - earthLog;
   const exponent = Math.round(currentLog);
-  const roundedOrders = Math.round(Math.abs(orders));
 
   distanceLabel.textContent = camera < EARTH_POSITION ? "Характерный размер" : "Характерный масштаб";
   distanceValue.textContent = formatMetric(meters);
-  scaleValue.textContent = Math.abs(orders) < 0.45
-    ? `10${superscript(exponent)} м · масштаб Земли`
-    : `10${superscript(exponent)} м · ${roundedOrders} порядков ${orders < 0 ? "внутрь" : "наружу"} от Земли`;
+
+  if (Math.abs(orders) < 0.45) {
+    scaleValue.textContent = `10${superscript(exponent)} м · центр двух логарифмических полуосей`;
+  } else if (orders < 0) {
+    scaleValue.textContent = `10${superscript(exponent)} м · логарифмическое расширение: равный путь уменьшает масштаб в 10 раз`;
+  } else {
+    scaleValue.textContent = `10${superscript(exponent)} м · логарифмическое сжатие: равный путь увеличивает масштаб в 10 раз`;
+  }
 
   const distanceFromCenter = Math.abs(camera - EARTH_POSITION) * 2;
   progressFill.style.width = `${distanceFromCenter * 50}%`;
@@ -367,7 +371,7 @@ function applyImpulse(amount) {
   velocity = clamp(velocity + amount, -MOTION.maxVelocity, MOTION.maxVelocity);
 }
 
-startButton.addEventListener("click", () => applyImpulse(0.035));
+startButton.addEventListener("click", () => applyImpulse(0.011666666666666667));
 infoButton.addEventListener("click", () => setInfoOpen(true));
 closeInfoButton.addEventListener("click", () => setInfoOpen(false));
 infoPanel.addEventListener("click", (event) => {
