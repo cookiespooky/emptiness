@@ -51,7 +51,7 @@ const MOTION = {
   dragMultiplier: 1.45,
   followSpeed: 12,
   kineticMultiplier: 1.9,
-  friction: 0.74,
+  friction: 1.48,
   maxVelocity: 0.5,
   wheelImpulse: 0.00022,
   keyImpulse: 0.1,
