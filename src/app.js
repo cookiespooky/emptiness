@@ -47,14 +47,14 @@ const positionedScenes = scenes.map((scene) => ({
 }));
 
 const MOTION = {
-  virtualLength: 16500,
+  virtualLength: 66000,
   dragMultiplier: 1.45,
   followSpeed: 12,
   kineticMultiplier: 1.9,
   friction: 1.48,
   maxVelocity: 0.5,
-  wheelImpulse: 0.00022,
-  keyImpulse: 0.1,
+  wheelImpulse: 0.000055,
+  keyImpulse: 0.025,
   textFadeSpeed: reducedMotion ? 7 : 1.5
 };
 
@@ -367,7 +367,7 @@ function applyImpulse(amount) {
   velocity = clamp(velocity + amount, -MOTION.maxVelocity, MOTION.maxVelocity);
 }
 
-startButton.addEventListener("click", () => applyImpulse(0.14));
+startButton.addEventListener("click", () => applyImpulse(0.035));
 infoButton.addEventListener("click", () => setInfoOpen(true));
 closeInfoButton.addEventListener("click", () => setInfoOpen(false));
 infoPanel.addEventListener("click", (event) => {
